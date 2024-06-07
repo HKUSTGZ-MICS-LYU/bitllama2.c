@@ -1,3 +1,7 @@
+## bit-llama2.c
+
+BitNet version of llama2.c (wip).
+
 ## llama2.c
 
 <p align="center">

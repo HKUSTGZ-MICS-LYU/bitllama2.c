@@ -1,0 +1,9 @@
+outmini/
+data/
+
+*.bin
+
+__pycache__
+
+run
+runq
