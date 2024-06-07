@@ -222,8 +222,8 @@ class Transformer(nn.Module):
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
             self.layers.append(TransformerBlock(layer_id, params))
-        # self.norm = RMSNorm(params.dim, eps=params.norm_eps)
-        self.output = BitLinear(params.dim, params.vocab_size, bias=False, qtype=params.qtype)
+        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.output = nn.Linear(params.dim, params.vocab_size, bias=False)
 
         # share the unembedding parameters with the embedding parameters
         self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
@@ -260,7 +260,7 @@ class Transformer(nn.Module):
 
         for layer in self.layers:
             h = layer(h, freqs_cos, freqs_sin)
-        # h = self.norm(h)
+        h = self.norm(h)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss

@@ -12,7 +12,7 @@ from tinystories import get_tokenizer_model_path
 
 # -----------------------------------------------------------------------------
 checkpoint = 'outmini_bit/ckpt.pt'
-start = "" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+start = "Once" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 100 # number of tokens generated in each sample
 temperature = 1.2 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
@@ -21,7 +21,7 @@ tokenizer = "data/tok512.model" # override the tokenizer model path
 seed = 1
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
-dtype = "float32"
+dtype = "bfloat16"
 compile = False # use PyTorch 2.0 to compile the model to be faster
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
@@ -50,6 +50,8 @@ if compile:
     print("Compiling the model...")
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
+print("Iters:", checkpoint_dict["iter_num"])
+print("Loss:", checkpoint_dict["best_val_loss"])
 # load the tokenizer
 vocab_source = checkpoint_dict["config"].get("vocab_source", "llama2")
 vocab_size = gptconf.vocab_size
