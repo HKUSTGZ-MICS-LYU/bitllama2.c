@@ -47,11 +47,12 @@ def bitnet_export(model, filepath):
 
     # now let's write out all the params
     weights = [
-        *[layer.attention_norm.weight for layer in model.layers],
-        *[layer.ffn_norm.weight for layer in model.layers],
+        # *[layer.attention_norm.weight for layer in model.layers],
+        # *[layer.ffn_norm.weight for layer in model.layers],
         model.norm.weight,
         model.tok_embeddings.weight,
     ]
+    # print(weights)
     for w in weights:
         serialize_fp32(out_file, w)
     
@@ -69,9 +70,9 @@ def bitnet_export(model, filepath):
         bit_weights.append(model.output)
 
     for bitlinear in bit_weights:
-        print(bitlinear)
         ws, wb = bitlinear.export()
         s = ws.detach().to(torch.float32).numpy()
+        print("scale:", s)
         out_file.write(struct.pack('f', s))
         out_file.write(wb)
 
