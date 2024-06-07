@@ -25,7 +25,7 @@ class ModelArgs:
     dropout: float = 0.0
     qtype: str = "1.5b"
 
-
+# RMSNorm is not used cuz we have built-in RMSNorm in BitLinear
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float):
         super().__init__()
@@ -197,12 +197,14 @@ class TransformerBlock(nn.Module):
             qtype=args.qtype
         )
         self.layer_id = layer_id
-        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        # self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        # self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
     def forward(self, x, freqs_cos, freqs_sin):
-        h = x + self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin)
-        out = h + self.feed_forward.forward(self.ffn_norm(h))
+        # h = x + self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin)
+        # out = h + self.feed_forward.forward(self.ffn_norm(h))
+        h = x + self.attention.forward(x, freqs_cos, freqs_sin)
+        out = h + self.feed_forward.forward(h)
         return out
 
 
@@ -220,7 +222,7 @@ class Transformer(nn.Module):
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
             self.layers.append(TransformerBlock(layer_id, params))
-        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
+        # self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = BitLinear(params.dim, params.vocab_size, bias=False, qtype=params.qtype)
 
         # share the unembedding parameters with the embedding parameters
@@ -242,7 +244,7 @@ class Transformer(nn.Module):
         self.last_loss = None
 
     def _init_weights(self, module):
-        if isinstance(module, BitLinear):
+        if isinstance(module, BitLinear) or isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
@@ -258,7 +260,7 @@ class Transformer(nn.Module):
 
         for layer in self.layers:
             h = layer(h, freqs_cos, freqs_sin)
-        h = self.norm(h)
+        # h = self.norm(h)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
