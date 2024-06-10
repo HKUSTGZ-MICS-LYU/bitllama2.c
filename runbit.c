@@ -322,7 +322,7 @@ void bit_matmul(float* xout, float* x, BitNetWeight* w, int n, int d){
     act_quantize(x, qa, a_s, n);
 
     uint8_t *weight = (uint8_t*)w->wq;
-    float s = w->s[0];
+    float s = w->s[0] * a_s;
 
     // Core BitNet matmul kernel
     for (int i=0; i<d; i++){
@@ -366,7 +366,6 @@ float* forward(Transformer* transformer, int token, int pos) {
         // attention rmsnorm (ignored)
         // rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
         bit_rmsnorm(s->xb, x, dim);
-
         // key and value point to the kv cache
         int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
         s->k = s->key_cache + loff + pos * kv_dim;
@@ -462,6 +461,7 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         // final matmul to get the output of the ffn
+        bit_rmsnorm(s->hb, s->hb, hidden_dim);
         bit_matmul(s->xb, s->hb, w->w2 + l, hidden_dim, dim);
 
         // residual connection
@@ -889,7 +889,7 @@ int main(){
 
     char *checkpoint_path = "outmini_bit/bit_model.bin";  // e.g. out/model.bin
     char *tokenizer_path = "tokenizer.bin";
-    float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
+    float temperature = 0.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 256;            // number of steps to run for
     char *prompt = "Once";        // prompt string
