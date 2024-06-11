@@ -1,19 +1,17 @@
 /* Inference for Ternary Quantized Llama-2 Transformer model (BitNet) in pure C */
 
-#include <stdio.h>
+#include "sim_stdlib.h"
 #include <stdlib.h>
-#include <ctype.h>
-#include <time.h>
 #include <math.h>
-#include <stdint.h>
 #include <string.h>
-#include <fcntl.h>
-#if defined _WIN32
-    #include "win.h"
-#else
-    #include <unistd.h>
-    #include <sys/mman.h>
-#endif
+
+#define EXIT_FAILURE 1
+
+extern const char _binary_bin_tokenizer_bin_start[];
+extern const char _binary_bin_model_bin_start[];
+extern const char _binary_bin_model_bin_end[];
+const char* tokenizer_bin = _binary_bin_tokenizer_bin_start;
+const char* model_bin = _binary_bin_model_bin_start;
 
 // Profiler Counters
 long total_time = 0;
@@ -82,17 +80,11 @@ typedef struct {
     Config config; // the hyperparameters of the architecture (the blueprint)
     TransformerWeights weights; // the weights of the model
     RunState state; // buffers for the "wave" of activations in the forward pass
-    // some more state needed to properly clean up the memory mapping (sigh)
-    int fd; // file descriptor for memory mapping
-    float* data; // memory mapped data pointer
-    ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
 long time_in_ms() {
     // return time in milliseconds, for benchmarking the model speed
-    struct timespec time;
-    clock_gettime(CLOCK_REALTIME, &time);
-    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+    return time();
 }
 
 void malloc_run_state(RunState* s, Config* p) {
@@ -111,7 +103,7 @@ void malloc_run_state(RunState* s, Config* p) {
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
      || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
-        fprintf(stderr, "malloc failed!\n");
+        printf("malloc failed!\n");
         exit(EXIT_FAILURE);
     }
 }
@@ -182,63 +174,44 @@ void memory_map_weights(TransformerWeights *w, Config* p, char* ptr, int shared_
     inc = init_bitnet_weight(w->w3, ptr, n_layers, p->hidden_dim, p->dim);
     ptr += inc;
 
-    // output final scales to check
-    // printf("Final w3 scales: ");
-    // for (int i = 0; i < n_layers; i++) {
-    //     printf("Layer %d: %f\n", i, w->w3[i].s[0]);
-    // }
-
     return;
 }
 
-void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weights,
-                     int* fd, float** data, ssize_t* file_size) {
-    FILE *file = fopen(checkpoint, "rb");
-    if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
+void read_checkpoint(Config* config, TransformerWeights* weights) {
+    char* ptr = (char*)model_bin;
     // read in magic number (uint32), has to be 0x616b3432, i.e. "ak42" in ASCII
-    uint32_t magic_number;
-    if (fread(&magic_number, sizeof(uint32_t), 1, file) != 1) { exit(EXIT_FAILURE); }
-    if (magic_number != 0x616b3432) { fprintf(stderr, "Bad magic number\n"); exit(EXIT_FAILURE); }
+    uint32_t magic_number = *(uint32_t*)ptr;
+    ptr += sizeof(uint32_t);
+    if (magic_number != 0x616b3432) { printf("Bad magic number\n"); exit(EXIT_FAILURE); }
     // read in the version number (uint32), has to be 2
-    int version;
-    if (fread(&version, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
-    if (version != 1) { fprintf(stderr, "Bad version %d, need version 2\n", version); exit(EXIT_FAILURE); }
+    int version = *(int*)(ptr);
+    if (version != 1) { printf( "Bad version %d, need version1\n", version); exit(EXIT_FAILURE); }
+    ptr += sizeof(int);
     int header_size = 256; // the header size for version 2 in bytes
     // read in the config header
-    if (fread(config, sizeof(Config), 1, file) != 1) { exit(EXIT_FAILURE); }
-
+    if (memcpy(config, ptr, sizeof(Config)) == NULL) { exit(EXIT_FAILURE); }
+    ptr += sizeof(Config);
     printf("Model Config:\ndim=%d, hidden_dim=%d, n_layers=%d, n_heads=%d, n_kv_heads=%d, vocab_size=%d, seq_len=%d\n",
            config->dim, config->hidden_dim, config->n_layers, config->n_heads, config->n_kv_heads, config->vocab_size, config->seq_len);
 
     // negative vocab size is hacky way of signaling unshared weights. bit yikes.
     int shared_weights = config->vocab_size > 0 ? 1 : 0;
     config->vocab_size = abs(config->vocab_size);
-    // figure out the file size
-    fseek(file, 0, SEEK_END); // move file pointer to end of file
-    *file_size = ftell(file); // get the file size, in bytes
-    fclose(file);
     // memory map the Transformer weights into the data pointer
-    *fd = open(checkpoint, O_RDONLY); // open in read only mode
-    if (*fd == -1) { fprintf(stderr, "open failed!\n"); exit(EXIT_FAILURE); }
-    *data = mmap(NULL, *file_size, PROT_READ, MAP_PRIVATE, *fd, 0);
-    if (*data == MAP_FAILED) { fprintf(stderr, "mmap failed!\n"); exit(EXIT_FAILURE); }
-    void* weights_ptr = ((char*)*data) + header_size; // skip header bytes. char is 1 byte
+    void* weights_ptr = ptr; // skip header bytes. char is 1 byte
     memory_map_weights(weights, config, weights_ptr, shared_weights);
 }
 
 
-void build_transformer(Transformer *t, char* checkpoint_path) {
-    printf("Building Transformer model from %s\n", checkpoint_path);
+void build_transformer(Transformer *t) {
+    printf("Building Transformer model...\n");
     // read in the Config and the Weights from the checkpoint
-    read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
+    read_checkpoint(&t->config, &t->weights);
     // allocate memory for the RunState buffers
     malloc_run_state(&t->state, &t->config);
 }
 
 void free_transformer(Transformer* t) {
-    // close the memory mapping
-    if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
-    if (t->fd != -1) { close(t->fd); }
     // free the RunState buffers
     free_run_state(&t->state);
 }
@@ -519,7 +492,7 @@ int compare_tokens(const void *a, const void *b) {
     return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
-void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
+void build_tokenizer(Tokenizer* t, int vocab_size) {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
     // malloc space to hold the scores and the strings
@@ -530,19 +503,27 @@ void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
         t->byte_pieces[i * 2] = (unsigned char)i;
         t->byte_pieces[i * 2 + 1] = '\0';
     }
+    unsigned char* ptr = (unsigned char*)tokenizer_bin;
     // read in the file
-    FILE *file = fopen(tokenizer_path, "rb");
-    if (!file) { fprintf(stderr, "couldn't load %s\n", tokenizer_path); exit(EXIT_FAILURE); }
-    if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+    if (!ptr) {
+         printf("couldn't load tokenizer\n"); exit(EXIT_FAILURE); 
+    }
+    if (memcpy(&t->max_token_length, ptr, sizeof(int)) == NULL) {
+         printf("failed read\n"); exit(EXIT_FAILURE);
+        }
+    ptr += sizeof(int);
+    // printf("max_token_length=%d\n", t->max_token_length);
     int len;
     for (int i = 0; i < vocab_size; i++) {
-        if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE);}
-        if (fread(&len, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+        if (memcpy(t->vocab_scores + i, ptr, sizeof(float)) == NULL) { printf("failed read\n"); exit(EXIT_FAILURE);}
+        ptr += sizeof(float);
+        if (memcpy(&len, ptr, sizeof(int) ) == NULL) { printf("failed read\n"); exit(EXIT_FAILURE); }
+        ptr += sizeof(int);
         t->vocab[i] = (char *)malloc(len + 1);
-        if (fread(t->vocab[i], len, 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+        if (memcpy(t->vocab[i], ptr, len) == NULL) { printf("failed read\n"); exit(EXIT_FAILURE); }
+        ptr += len;
         t->vocab[i][len] = '\0'; // add the string terminating token
     }
-    fclose(file);
 }
 
 void free_tokenizer(Tokenizer* t) {
@@ -559,7 +540,7 @@ char* decode(Tokenizer* t, int prev_token, int token) {
     // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
     // parse this and convert and return the actual byte
     unsigned char byte_val;
-    if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
+    if (tokscanf(piece, &byte_val) == 1) {
         piece = (char*)t->byte_pieces + byte_val * 2;
     }
     return piece;
@@ -582,14 +563,14 @@ void safe_printf(char *piece) {
 int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
     // efficiently find the perfect match for str in vocab, return its index or -1 if not found
     TokenIndex tok = { .str = str }; // acts as the key to search for
-    TokenIndex *res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
+    TokenIndex *res = (TokenIndex* )bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
     return res != NULL ? res->id : -1;
 }
 
 void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
     // encode the string text (input) into an upper-bound preallocated tokens[] array
     // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
-    if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
+    if (text == NULL) { printf("cannot encode NULL text\n"); exit(EXIT_FAILURE); }
 
     if (t->sorted_vocab == NULL) {
         // lazily malloc and sort the vocabulary
@@ -850,6 +831,7 @@ int sample(Sampler* sampler, float* logits) {
     return next;
 }
 
+
 void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
     char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
@@ -859,7 +841,7 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     int* prompt_tokens = (int*)malloc((strlen(prompt)+3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
     encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
     if (num_prompt_tokens < 1) {
-        fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
+        printf("something is wrong, expected at least 1 prompt token\n");
         exit(EXIT_FAILURE);
     }
 
@@ -889,7 +871,6 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         // print the token as string, decode it with the Tokenizer object
         char* piece = decode(tokenizer, token, next);
         safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
-        fflush(stdout);
         token = next;
 
         // init the timer here because the first iteration can be slower
@@ -900,7 +881,7 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if (pos > 1) {
         long end = time_in_ms();
-        fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
+        printf("achieved cycles per tok: %f\n", (end-start)/(pos-1) );
     }
 
     free(prompt_tokens);
@@ -908,11 +889,9 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
 
 int main(){
 
-    char *checkpoint_path = "outmini_bit_3M/bit_model.bin";  // e.g. out/model.bin
-    char *tokenizer_path = "tokenizer.bin";
     float temperature = 0.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
-    int steps = 256;            // number of steps to run for
+    int steps = 8;            // number of steps to run for
     char *prompt = "";        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
 
@@ -924,17 +903,18 @@ int main(){
 
     // build the Transformer via the model .bin file
     Transformer transformer;
-    build_transformer(&transformer, checkpoint_path);
+    build_transformer(&transformer);
     if (steps == 0 || steps > transformer.config.seq_len) steps = transformer.config.seq_len; // override to ~max length
-
+    printf("Building Tokenizer and Sampler...\n");
     // build the Tokenizer via the tokenizer .bin file
     Tokenizer tokenizer;
-    build_tokenizer(&tokenizer, tokenizer_path, transformer.config.vocab_size);
+    build_tokenizer(&tokenizer, transformer.config.vocab_size);
 
     // build the Sampler
     Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
     
+    printf("Generating: \n");
     long start = time_in_ms();
     generate(&transformer, &tokenizer, &sampler, prompt, steps);
     total_time += time_in_ms() - start;
@@ -945,9 +925,10 @@ int main(){
     free_transformer(&transformer);
 
     // Print Profiler Information
-    printf("Total Time: %ld ms\n", total_time);
-    printf("Quant Time: %ld ms\n", quant_time);
-    printf("BitMatmul Time: %ld ms\n", bitmatmul_time);
+    printf("Total Time: %d\n", total_time);
+    printf("Quant Time: %d\n", quant_time);
+    printf("BitMatmul Time: %d\n", bitmatmul_time);
     
+    exit(0);
     return 0;
 }
