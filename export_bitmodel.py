@@ -72,7 +72,7 @@ def bitnet_export(model, filepath):
     for bitlinear in bit_weights:
         ws, wb = bitlinear.export()
         s = ws.detach().to(torch.float32).numpy()
-        print("scale:", s)
+        # print("scale:", s)
         out_file.write(struct.pack('f', s))
         out_file.write(wb)
 
@@ -96,8 +96,8 @@ def load_checkpoint(checkpoint):
     return model
 
 if __name__ == "__main__":
-    model_path = "outmini_bit/ckpt.pt"
-    bin_path = "outmini_bit/bit_model.bin"
+    model_path = "outmini_bit_3M/ckpt.pt"
+    bin_path = "outmini_bit_3M/bit_model.bin"
     model = load_checkpoint(model_path)
     bitnet_export(model, bin_path)
 

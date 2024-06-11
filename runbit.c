@@ -14,6 +14,14 @@
     #include <unistd.h>
     #include <sys/mman.h>
 #endif
+
+// Profiler Counters
+long total_time = 0;
+long attention_time = 0;
+long ffn_time = 0;
+long quant_time = 0;
+long bitmatmul_time = 0;
+
 // ----------------------------------------------------------------------------
 // Transformer model
 
@@ -79,6 +87,13 @@ typedef struct {
     float* data; // memory mapped data pointer
     ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
+
+long time_in_ms() {
+    // return time in milliseconds, for benchmarking the model speed
+    struct timespec time;
+    clock_gettime(CLOCK_REALTIME, &time);
+    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+}
 
 void malloc_run_state(RunState* s, Config* p) {
     // we calloc instead of malloc to keep valgrind happy
@@ -318,12 +333,15 @@ void bit_matmul(float* xout, float* x, BitNetWeight* w, int n, int d){
     int8_t *qa = (int8_t*)malloc(n * sizeof(int8_t));
     int32_t *qo = (int32_t*)malloc(d * sizeof(int32_t));
 
+    long start = time_in_ms();
     float a_s = act_scale(x, n);
     act_quantize(x, qa, a_s, n);
+    quant_time += time_in_ms() - start;
 
     uint8_t *weight = (uint8_t*)w->wq;
     float s = w->s[0] * a_s;
 
+    start = time_in_ms();
     // Core BitNet matmul kernel
     for (int i=0; i<d; i++){
         qo[i] = 0;
@@ -333,11 +351,14 @@ void bit_matmul(float* xout, float* x, BitNetWeight* w, int n, int d){
             qo[i] += w_shift == 1 ? qa[j] : (w_shift == 3 ? -qa[j] : 0); 
         }
     }
+    bitmatmul_time += time_in_ms() - start;
 
+    start = time_in_ms();
     // Dequantization
     for(int i = 0; i < d; i++){
         xout[i] = qo[i] * s;
     }
+    quant_time += time_in_ms() - start;
 
     free(qa);
     free(qo);
@@ -432,6 +453,7 @@ float* forward(Transformer* transformer, int token, int pos) {
             }
         }
 
+        bit_rmsnorm(s->xb, s->xb, dim);
         // final matmul to get the output of the attention
         bit_matmul(s->xb2, s->xb, w->wo + l, dim, dim);
 
@@ -443,7 +465,6 @@ float* forward(Transformer* transformer, int token, int pos) {
         // ffn rmsnorm (ignored)
         // rmsnorm(s->xb, x, w->rms_ffn_weight + l*dim, dim);      
         bit_rmsnorm(s->xb, x, dim);
-
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
@@ -872,27 +893,27 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         token = next;
 
         // init the timer here because the first iteration can be slower
-        // if (start == 0) { start = time_in_ms(); }
+        if (start == 0) { start = time_in_ms(); }
     }
     printf("\n");
 
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
-    // if (pos > 1) {
-    //     long end = time_in_ms();
-    //     fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
-    // }
+    if (pos > 1) {
+        long end = time_in_ms();
+        fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
+    }
 
     free(prompt_tokens);
 }
 
 int main(){
 
-    char *checkpoint_path = "outmini_bit/bit_model.bin";  // e.g. out/model.bin
+    char *checkpoint_path = "outmini_bit_3M/bit_model.bin";  // e.g. out/model.bin
     char *tokenizer_path = "tokenizer.bin";
     float temperature = 0.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 256;            // number of steps to run for
-    char *prompt = "Once";        // prompt string
+    char *prompt = "";        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
 
     // parameter validation/overrides
@@ -914,11 +935,19 @@ int main(){
     Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
     
+    long start = time_in_ms();
     generate(&transformer, &tokenizer, &sampler, prompt, steps);
+    total_time += time_in_ms() - start;
 
     // memory and file handles cleanup
     free_sampler(&sampler);
     free_tokenizer(&tokenizer);
     free_transformer(&transformer);
+
+    // Print Profiler Information
+    printf("Total Time: %ld ms\n", total_time);
+    printf("Quant Time: %ld ms\n", quant_time);
+    printf("BitMatmul Time: %ld ms\n", bitmatmul_time);
+    
     return 0;
 }

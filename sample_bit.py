@@ -11,14 +11,14 @@ from tokenizer import Tokenizer
 from tinystories import get_tokenizer_model_path
 
 # -----------------------------------------------------------------------------
-checkpoint = 'outmini_bit/ckpt.pt'
-start = "Once" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+checkpoint = 'outmini_bit_3M/ckpt.pt'
+start = "" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 100 # number of tokens generated in each sample
-temperature = 1.2 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+temperature = 0.0 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 top_k = 300 # retain only the top_k most likely tokens, clamp others to have 0 probability
 tokenizer = "data/tok512.model" # override the tokenizer model path
-seed = 1
+seed = 0
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 dtype = "bfloat16"
@@ -70,6 +70,8 @@ if start.startswith('FILE:'):
         start = f.read()
 start_ids = enc.encode(start, bos=True, eos=False)
 x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+
+from bitlinear import SimpleRMSNorm, BitLinear
 
 # run generation
 with torch.no_grad():
