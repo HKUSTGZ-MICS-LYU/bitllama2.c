@@ -54,7 +54,7 @@ LDFLAGS += -lm -lc
 ifeq ($(MARCH), rv32ic)
     LDFLAGS += -lgcc
 else
-    LDFLAGS += -lrvfp
+    LDFLAGS += -lrvfp -lgcc
 endif
 
 DOT:= .

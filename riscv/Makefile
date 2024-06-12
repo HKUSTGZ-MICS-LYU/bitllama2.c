@@ -3,7 +3,7 @@ PROJ_NAME=bitllama
 DEBUG?=no
 BENCH=yes
 
-USE_SIMD?=32
+USE_SIMD?=0
 BITNET_QUANT?=3
 
 CFLAGS += -fno-common -fno-inline

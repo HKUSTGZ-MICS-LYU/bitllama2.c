@@ -5,6 +5,8 @@
 #include <math.h>
 #include <string.h>
 
+#include "bitnet.h"
+
 #define EXIT_FAILURE 1
 
 extern const char _binary_bin_tokenizer_bin_start[];
@@ -18,7 +20,7 @@ long total_time = 0;
 long attention_time = 0;
 long ffn_time = 0;
 long quant_time = 0;
-long bitmatmul_time = 0;
+long fmatmul_time = 0;
 
 // ----------------------------------------------------------------------------
 // Transformer model
@@ -219,6 +221,7 @@ void free_transformer(Transformer* t) {
 // neural net blocks; the dynamics of the Transformer
 
 void rmsnorm(float* o, float* x, float* weight, int size) {
+    long start = time_in_ms();
     // calculate sum of squares
     float ss = 0.0f;
     for (int j = 0; j < size; j++) {
@@ -231,6 +234,7 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
     for (int j = 0; j < size; j++) {
         o[j] = weight[j] * (ss * x[j]);
     }
+    rmsnorm_time += time_in_ms() - start;
 }
 
 void softmax(float* x, int size) {
@@ -256,6 +260,7 @@ void softmax(float* x, int size) {
 void fmatmul(float* xout, float* x, float* w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
+    long start = time_in_ms();
     int i;
     for (i = 0; i < d; i++) {
         float val = 0.0f;
@@ -264,41 +269,7 @@ void fmatmul(float* xout, float* x, float* w, int n, int d) {
         }
         xout[i] = val;
     }
-}
-
-
-// BitNet Linear Forwarding Blocks
-
-void bit_rmsnorm(float *a_out, float *a, int n){
-    float scale = 0;
-    for (int i = 0; i < n; i++){
-        scale += a[i]*a[i];
-    }
-    scale /= n;
-    scale = 1.0f / sqrtf(scale);
-    scale /= n;
-    for (int i = 0; i < n; i++){
-        a_out[i] = a[i]*scale;
-    }
-}
-
-float act_scale(float *a, int n){
-
-    float max = -1;
-    for (int i = 0; i < n; i++){
-        if (fabs(a[i]) > max){
-            max = fabs(a[i]);
-        }
-    }
-    return max/127.0;
-}
-
-void act_quantize(float *a, int8_t *qa, float s, int n){
-
-    float scale = 1.0/s;
-    for (int i = 0; i < n; i++){
-        qa[i] = (int8_t)round(a[i]*scale);
-    }
+    fmatmul_time += time_in_ms() - start;
 }
 
 void bit_matmul(float* xout, float* x, BitNetWeight* w, int n, int d){
@@ -314,17 +285,7 @@ void bit_matmul(float* xout, float* x, BitNetWeight* w, int n, int d){
     uint8_t *weight = (uint8_t*)w->wq;
     float s = w->s[0] * a_s;
 
-    start = time_in_ms();
-    // Core BitNet matmul kernel
-    for (int i=0; i<d; i++){
-        qo[i] = 0;
-        for(int j=0; j<n; j++){
-            uint8_t w = weight[(i*n + j) >> 2];
-            uint8_t w_shift = (w >> (6-((j&0b11)<<1))) & 0b11;
-            qo[i] += w_shift == 1 ? qa[j] : (w_shift == 3 ? -qa[j] : 0); 
-        }
-    }
-    bitmatmul_time += time_in_ms() - start;
+    qmatmul(qa, qo, weight, n, d);
 
     start = time_in_ms();
     // Dequantization
@@ -356,7 +317,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
-
+        printf("Processing Layer %d/%d\n", (int)l+1, (int)p->n_layers);
         // attention rmsnorm (ignored)
         // rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
         bit_rmsnorm(s->xb, x, dim);
@@ -870,7 +831,9 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
 
         // print the token as string, decode it with the Tokenizer object
         char* piece = decode(tokenizer, token, next);
+        printf("Generated:");
         safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
+        printf("\n");
         token = next;
 
         // init the timer here because the first iteration can be slower
@@ -891,7 +854,7 @@ int main(){
 
     float temperature = 0.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
-    int steps = 8;            // number of steps to run for
+    int steps = 1;            // number of steps to run for
     char *prompt = "";        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
 
@@ -926,8 +889,10 @@ int main(){
 
     // Print Profiler Information
     printf("Total Time: %d\n", total_time);
+    printf("BitMatmul Time: %d\n", matmul_time);
+    printf("RMSNorm Time: %d\n", rmsnorm_time);
     printf("Quant Time: %d\n", quant_time);
-    printf("BitMatmul Time: %d\n", bitmatmul_time);
+    printf("FMatmul Time: %d\n", fmatmul_time);
     
     exit(0);
     return 0;

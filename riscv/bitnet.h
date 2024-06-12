@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <math.h>
+#include "sim_stdlib.h"
 #include "simd.h"
 
 // Profiler Variables
@@ -26,7 +27,7 @@ long dequantize_time = 0;
 //     exit(0);
 // }
 
-void matmul(int8_t *input, int32_t *output, uint8_t *weight, int n, int d){
+void qmatmul(int8_t *input, int32_t *output, uint8_t *weight, int n, int d){
     long start = time();
 
     for (int i=0; i<d; i++){
@@ -104,9 +105,11 @@ void dequantize(int32_t *a, float *af, float s, int d){
     dequantize_time += time() - start;
 }
 
-void rmsnorm(float *a, int n){
-    long start = time();
 
+// BitNet Linear Forwarding Blocks
+
+void bit_rmsnorm(float *a_out, float *a, int n){
+    long start = time();
     float scale = 0;
     for (int i = 0; i < n; i++){
         scale += a[i]*a[i];
@@ -115,9 +118,8 @@ void rmsnorm(float *a, int n){
     scale = 1.0f / sqrtf(scale);
     scale /= n;
     for (int i = 0; i < n; i++){
-        a[i] *= scale;
+        a_out[i] = a[i]*scale;
     }
-
     rmsnorm_time += time() - start;
 }
 
@@ -133,45 +135,10 @@ float act_scale(float *a, int n){
 }
 
 void act_quantize(float *a, int8_t *qa, float s, int n){
-    long start = time();
 
     float scale = 1.0/s;
     for (int i = 0; i < n; i++){
         qa[i] = (int8_t)round(a[i]*scale);
     }
-
-    act_quantize_time += time() - start;
 }
 
-void forward(float *a, float *o, uint8_t *w, float s, int n, int d){
-    int8_t *qa = (int8_t*)malloc(n * sizeof(int8_t));
-    int32_t *qo = (int32_t*)malloc(d * sizeof(int32_t));
-
-    rmsnorm(a, n);
-    float a_s = act_scale(a, n);
-    act_quantize(a, qa, a_s, n);
-
-    matmul(qa, qo, w, n, d);
-    dequantize(qo, o, s*a_s, d);
-
-    free(qa);
-    free(qo);
-}
-
-void ReLU(float* a, int n){
-    for (int i = 0; i < n; i++){
-        a[i] = a[i] > 0 ? a[i] : 0;
-    }
-}
-
-int argmax(float *a, int n){
-    float max = -1;
-    int idx = -1;
-    for (int i = 0; i < n; i++){
-        if (a[i] > max){
-            max = a[i];
-            idx = i;
-        }
-    }
-    return idx;
-}
