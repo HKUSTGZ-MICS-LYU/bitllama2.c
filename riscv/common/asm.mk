@@ -51,10 +51,10 @@ LDFLAGS += -nostdlib -nostartfiles -ffreestanding -Wl,-Bstatic,-T,$(LDSCRIPT),-M
 LDFLAGS += -L./ -nolibc 
 LDFLAGS += -lm -lc
 
-ifeq ($(MARCH), rv32ic)
-    LDFLAGS += -lgcc
-else
+ifeq ($(MARCH), rv32imc)
     LDFLAGS += -lrvfp -lgcc
+else
+    LDFLAGS += -lgcc
 endif
 
 DOT:= .
