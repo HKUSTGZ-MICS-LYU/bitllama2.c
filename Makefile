@@ -1,6 +1,7 @@
 # choose your compiler, e.g. gcc/clang
 # example override to clang: make run CC=clang
 CC = gcc
+LD = ld
 
 # the most basic way of building that is most likely to work on most systems
 .PHONY: run
@@ -17,6 +18,12 @@ rundebug: run.c
 .PHONY: runbit
 runbit: runbit.c
 	$(CC) -O3 -o runbit runbit.c -lm
+
+.PHONY: run_aio
+run_aio: run_aio.c
+	$(LD) -r -b binary -o tokenizer.o tokenizer.bin
+	$(LD) -r -b binary -o model.o model.bin
+	$(CC) -O3 -o run_aio run_aio.c tokenizer.o model.o -lm
 # https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
 # https://simonbyrne.github.io/notes/fastmath/
 # -Ofast enables all -O3 optimizations.

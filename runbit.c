@@ -182,12 +182,6 @@ void memory_map_weights(TransformerWeights *w, Config* p, char* ptr, int shared_
     inc = init_bitnet_weight(w->w3, ptr, n_layers, p->hidden_dim, p->dim);
     ptr += inc;
 
-    // output final scales to check
-    // printf("Final w3 scales: ");
-    // for (int i = 0; i < n_layers; i++) {
-    //     printf("Layer %d: %f\n", i, w->w3[i].s[0]);
-    // }
-
     return;
 }
 

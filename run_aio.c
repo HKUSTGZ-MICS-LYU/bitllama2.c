@@ -1,17 +1,20 @@
 /* Inference for Ternary Quantized Llama-2 Transformer model (BitNet) in pure C */
 
-#include "sim_stdlib.h"
+#include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <math.h>
+#include <time.h>
 #include <string.h>
+#include <ctype.h>
 
 #define EXIT_FAILURE 1
 
-extern const char _binary_bin_tokenizer_bin_start[];
-extern const char _binary_bin_model_bin_start[];
-extern const char _binary_bin_model_bin_end[];
-const char* tokenizer_bin = _binary_bin_tokenizer_bin_start;
-const char* model_bin = _binary_bin_model_bin_start;
+extern const char _binary_tokenizer_bin_start[];
+extern const char _binary_model_bin_start[];
+extern const char _binary_model_bin_end[];
+const char* tokenizer_bin = _binary_tokenizer_bin_start;
+const char* model_bin = _binary_model_bin_start;
 
 // Profiler Counters
 long total_time = 0;
@@ -84,7 +87,9 @@ typedef struct {
 
 long time_in_ms() {
     // return time in milliseconds, for benchmarking the model speed
-    return time();
+    struct timespec time;
+    clock_gettime(CLOCK_REALTIME, &time);
+    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
 }
 
 void malloc_run_state(RunState* s, Config* p) {
@@ -198,7 +203,7 @@ void read_checkpoint(Config* config, TransformerWeights* weights) {
     int shared_weights = config->vocab_size > 0 ? 1 : 0;
     config->vocab_size = abs(config->vocab_size);
     // memory map the Transformer weights into the data pointer
-    void* weights_ptr = (char*)(model_bin + header_size); // skip header bytes. char is 1 byte
+    void* weights_ptr = (char*)model_bin + header_size; // skip header bytes. char is 1 byte
     memory_map_weights(weights, config, weights_ptr, shared_weights);
 }
 
@@ -356,6 +361,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
+        // printf("[Progress] Forwarding Layer %d/%d...\n", (int)l+1, (int)p->n_layers);
 
         // attention rmsnorm (ignored)
         // rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
@@ -469,6 +475,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     // classifier into logits
     fmatmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+
     return s->logits;
 }
 
@@ -540,7 +547,7 @@ char* decode(Tokenizer* t, int prev_token, int token) {
     // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
     // parse this and convert and return the actual byte
     unsigned char byte_val;
-    if (tokscanf(piece, &byte_val) == 1) {
+    if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
         piece = (char*)t->byte_pieces + byte_val * 2;
     }
     return piece;
@@ -881,7 +888,7 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if (pos > 1) {
         long end = time_in_ms();
-        printf("achieved cycles per tok: %d\n", (end-start)/(pos-1) );
+        printf("achieved cycles per tok: %ld\n", (end-start)/(pos-1) );
     }
 
     free(prompt_tokens);
@@ -925,9 +932,9 @@ int main(){
     free_transformer(&transformer);
 
     // Print Profiler Information
-    printf("Total Time: %d\n", total_time);
-    printf("Quant Time: %d\n", quant_time);
-    printf("BitMatmul Time: %d\n", bitmatmul_time);
+    printf("Total Time: %ld\n", total_time);
+    printf("Quant Time: %ld\n", quant_time);
+    printf("BitMatmul Time: %ld\n", bitmatmul_time);
     
     exit(0);
     return 0;
