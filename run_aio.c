@@ -352,6 +352,9 @@ float* forward(Transformer* transformer, int token, int pos) {
     float* content_row = w->token_embedding_table + token * dim;
     memcpy(x, content_row, dim*sizeof(*x));
 
+    size_t qa_size = dim > hidden_dim ? dim : hidden_dim;
+    int8_t* qa = (int8_t*)malloc(qa_size * sizeof(int8_t));
+    float a_s = 0.0f;
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
 
@@ -363,15 +366,13 @@ float* forward(Transformer* transformer, int token, int pos) {
         s->k = s->key_cache + loff + pos * kv_dim;
         s->v = s->value_cache + loff + pos * kv_dim;
 
-        int8_t* qa = (int8_t*)malloc(dim * sizeof(int8_t));
-        float a_s = act_scale(s->xb, dim);
-
+        a_s = act_scale(s->xb, dim);
         act_quantize(s->xb, qa, a_s, dim);
+
         // qkv matmuls for this position
         bit_matmul(s->q, qa, w->wq + l, dim, dim, a_s);
         bit_matmul(s->k, qa, w->wk + l, dim, kv_dim, a_s);
         bit_matmul(s->v, qa, w->wv + l, dim, kv_dim, a_s);
-        free(qa);
 
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         for (int i = 0; i < dim; i+=2) {
@@ -430,13 +431,12 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         bit_rmsnorm(s->xb, s->xb, dim);
-        qa = (int8_t*)malloc(dim * sizeof(int8_t));
+
         a_s = act_scale(s->xb, dim);
-        
         act_quantize(s->xb, qa, a_s, dim);
+
         // final matmul to get the output of the attention
         bit_matmul(s->xb2, qa, w->wo + l, dim, dim, a_s);
-        free(qa);
 
         // residual connection back into x
         for (int i = 0; i < dim; i++) {
@@ -447,15 +447,13 @@ float* forward(Transformer* transformer, int token, int pos) {
         // rmsnorm(s->xb, x, w->rms_ffn_weight + l*dim, dim);      
         bit_rmsnorm(s->xb, x, dim);
 
-        qa = (int8_t*)malloc(dim * sizeof(int8_t));
         a_s = act_scale(s->xb, dim);
-        
         act_quantize(s->xb, qa, a_s, dim);
+
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
         bit_matmul(s->hb, qa, w->w1 + l, dim, hidden_dim, a_s);
         bit_matmul(s->hb2, qa, w->w3 + l, dim, hidden_dim, a_s);
-        free(qa);
 
         // SwiGLU non-linearity
         for (int i = 0; i < hidden_dim; i++) {
@@ -469,19 +467,18 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // final matmul to get the output of the ffn
         bit_rmsnorm(s->hb, s->hb, hidden_dim);
-        qa = (int8_t*)malloc(hidden_dim * sizeof(int8_t));
+        
         a_s = act_scale(s->hb, dim);
         act_quantize(s->hb, qa, a_s, dim);
 
         bit_matmul(s->xb, qa, w->w2 + l, hidden_dim, dim, a_s);
-        free(qa);
 
         // residual connection
         for (int i = 0; i < dim; i++) {
             x[i] += s->xb[i];
         }
     }
-
+    free(qa);
     // final rmsnorm
     rmsnorm(x, x, w->rms_final_weight, dim);
 
@@ -909,7 +906,7 @@ int main(){
 
     float temperature = 0.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
-    int steps = 8;            // number of steps to run for
+    int steps = 256;            // number of steps to run for
     char *prompt = "";        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
 
