@@ -322,20 +322,14 @@ void act_quantize(float *a, int8_t *qa, float s, int n){
     }
 }
 
-void bit_matmul(float* xout, float* x, BitNetWeight* w, int n, int d){
+void bit_matmul(float* xout, int8_t* qa, BitNetWeight* w, int n, int d, float a_s){
     // Assume x is already processed in bitnet_rmsnorm
-    int8_t *qa = (int8_t*)malloc(n * sizeof(int8_t));
     int32_t *qo = (int32_t*)malloc(d * sizeof(int32_t));
-
-    long start = time_in_ms();
-    float a_s = act_scale(x, n);
-    act_quantize(x, qa, a_s, n);
-    quant_time += time_in_ms() - start;
 
     uint8_t *weight = (uint8_t*)w->wq;
     float s = w->s[0] * a_s;
 
-    start = time_in_ms();
+    long start = time_in_ms();
     // Core BitNet matmul kernel
     for (int i=0; i<d; i++){
         qo[i] = 0;
@@ -354,7 +348,6 @@ void bit_matmul(float* xout, float* x, BitNetWeight* w, int n, int d){
     }
     quant_time += time_in_ms() - start;
 
-    free(qa);
     free(qo);
 }
 
@@ -386,10 +379,15 @@ float* forward(Transformer* transformer, int token, int pos) {
         s->k = s->key_cache + loff + pos * kv_dim;
         s->v = s->value_cache + loff + pos * kv_dim;
 
+        int8_t* qa = (int8_t*)malloc(dim * sizeof(int8_t));
+        float a_s = act_scale(s->xb, dim);
+
+        act_quantize(s->xb, qa, a_s, dim);
         // qkv matmuls for this position
-        bit_matmul(s->q, s->xb, w->wq + l, dim, dim);
-        bit_matmul(s->k, s->xb, w->wk + l, dim, kv_dim);
-        bit_matmul(s->v, s->xb, w->wv + l, dim, kv_dim);
+        bit_matmul(s->q, qa, w->wq + l, dim, dim, a_s);
+        bit_matmul(s->k, qa, w->wk + l, dim, kv_dim, a_s);
+        bit_matmul(s->v, qa, w->wv + l, dim, kv_dim, a_s);
+        free(qa);
 
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         for (int i = 0; i < dim; i+=2) {
@@ -448,8 +446,13 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         bit_rmsnorm(s->xb, s->xb, dim);
+        qa = (int8_t*)malloc(dim * sizeof(int8_t));
+        a_s = act_scale(s->xb, dim);
+        
+        act_quantize(s->xb, qa, a_s, dim);
         // final matmul to get the output of the attention
-        bit_matmul(s->xb2, s->xb, w->wo + l, dim, dim);
+        bit_matmul(s->xb2, qa, w->wo + l, dim, dim, a_s);
+        free(qa);
 
         // residual connection back into x
         for (int i = 0; i < dim; i++) {
@@ -460,10 +463,15 @@ float* forward(Transformer* transformer, int token, int pos) {
         // rmsnorm(s->xb, x, w->rms_ffn_weight + l*dim, dim);      
         bit_rmsnorm(s->xb, x, dim);
 
+        qa = (int8_t*)malloc(dim * sizeof(int8_t));
+        a_s = act_scale(s->xb, dim);
+        
+        act_quantize(s->xb, qa, a_s, dim);
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
-        bit_matmul(s->hb, s->xb, w->w1 + l, dim, hidden_dim);
-        bit_matmul(s->hb2, s->xb, w->w3 + l, dim, hidden_dim);
+        bit_matmul(s->hb, qa, w->w1 + l, dim, hidden_dim, a_s);
+        bit_matmul(s->hb2, qa, w->w3 + l, dim, hidden_dim, a_s);
+        free(qa);
 
         // SwiGLU non-linearity
         for (int i = 0; i < hidden_dim; i++) {
@@ -477,7 +485,12 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // final matmul to get the output of the ffn
         bit_rmsnorm(s->hb, s->hb, hidden_dim);
-        bit_matmul(s->xb, s->hb, w->w2 + l, hidden_dim, dim);
+        qa = (int8_t*)malloc(hidden_dim * sizeof(int8_t));
+        a_s = act_scale(s->hb, dim);
+        act_quantize(s->hb, qa, a_s, dim);
+
+        bit_matmul(s->xb, qa, w->w2 + l, hidden_dim, dim, a_s);
+        free(qa);
 
         // residual connection
         for (int i = 0; i < dim; i++) {

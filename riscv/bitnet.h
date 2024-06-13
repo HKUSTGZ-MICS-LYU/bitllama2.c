@@ -7,8 +7,7 @@
 long addsub4_time = 0;
 long matmul_time = 0;
 long rmsnorm_time = 0;
-long act_quantize_time = 0;
-long dequantize_time = 0;
+long quant_time = 0;
 
 // Diff Test Example
 // int addr = (i*n + j) >> 3;
@@ -102,7 +101,7 @@ void dequantize(int32_t *a, float *af, float s, int d){
         af[i] = a[i] * s;
     }
 
-    dequantize_time += time() - start;
+    quant_time += time() - start;
 }
 
 
@@ -125,20 +124,24 @@ void bit_rmsnorm(float *a_out, float *a, int n){
 
 float act_scale(float *a, int n){
 
+    long start = time();
     float max = -1;
     for (int i = 0; i < n; i++){
         if (fabs(a[i]) > max){
             max = fabs(a[i]);
         }
     }
+    quant_time += time() - start;
     return max/127.0;
 }
 
 void act_quantize(float *a, int8_t *qa, float s, int n){
 
+    long start = time();
     float scale = 1.0/s;
     for (int i = 0; i < n; i++){
         qa[i] = (int8_t)round(a[i]*scale);
     }
+    quant_time += time() - start;
 }
 
