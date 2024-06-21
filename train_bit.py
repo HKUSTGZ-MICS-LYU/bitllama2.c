@@ -25,6 +25,7 @@ from functools import partial
 
 import torch
 from bitmodel import Transformer, ModelArgs
+from export_bitmodel import bitnet_export
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -73,6 +74,7 @@ warmup_iters = 1000  # how many steps to warm up for
 device = "cuda"  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = "bfloat16"  # float32|bfloat16|float16
 compile = True  # use PyTorch 2.0 to compile the model to be faster
+qtype = "1.5b"
 # -----------------------------------------------------------------------------
 config_keys = [
     k
@@ -155,7 +157,8 @@ model_args = dict(
     multiple_of=multiple_of,
     max_seq_len=max_seq_len,
     dropout=dropout,
-    hidden_dim=hidden_dim
+    hidden_dim=hidden_dim,
+    qtype=qtype
 )  # start with model_args from command line
 if init_from == "scratch":
     # init a new model from scratch
@@ -291,7 +294,7 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, "ckpt.pt"))
-                # model_export(raw_model, os.path.join(out_dir, "model.bin"), version=0)
+                bitnet_export(model, os.path.join(out_dir, "bit_model.bin"))
     if iter_num == 0 and eval_only:
         break
 

@@ -71,7 +71,7 @@ def bitnet_export(model, filepath):
 
     for bitlinear in bit_weights:
         ws, wb = bitlinear.export()
-        s = ws.detach().to(torch.float32).numpy()
+        s = ws.detach().to(torch.float32).cpu().numpy()
         # print("scale:", s)
         out_file.write(struct.pack('f', s))
         out_file.write(wb)
