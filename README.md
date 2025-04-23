@@ -2,6 +2,29 @@
 
 BitNet version of llama2.c (wip).
 
+### Usage
+
+We have two pre-trained models included, a 1MB one and a 3MB one.
+
+To build a normal executable:
+```
+# modify model or tokenizer paths in runbit.c
+make runbit
+./runbit
+```
+
+To build an all-in-one executable:
+```
+make run_aio
+./run_aio
+```
+
+### Acknowledgement
+
+This repo is essentially a fork from the great llama2.c:
+
+https://github.com/karpathy/llama2.c
+
 ## llama2.c
 
 <p align="center">
