@@ -17,9 +17,13 @@ const char* model_bin = _binary_bin_model_bin_start;
 
 // Profiler Counters
 long total_time = 0;
+long forward_time = 0;
+long rope_time = 0;
+long glu_time = 0;
 long attention_time = 0;
 long ffn_time = 0;
 long fmatmul_time = 0;
+
 
 // ----------------------------------------------------------------------------
 // Transformer model
@@ -309,6 +313,7 @@ float* forward(Transformer* transformer, int token, int pos) {
     size_t qa_size = dim > hidden_dim ? dim : hidden_dim;
     int8_t* qa = (int8_t*)malloc(qa_size * sizeof(int8_t));
     float a_s = 0.0f;
+    long start = time_in_ms();
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
         printf("Processing Layer %d/%d\n", (int)l+1, (int)p->n_layers);
@@ -328,6 +333,7 @@ float* forward(Transformer* transformer, int token, int pos) {
         bit_matmul(s->k, qa, w->wk + l, dim, kv_dim, a_s);
         bit_matmul(s->v, qa, w->wv + l, dim, kv_dim, a_s);
 
+        start = time_in_ms();
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         for (int i = 0; i < dim; i+=2) {
             int head_dim = i % head_size;
@@ -344,9 +350,11 @@ float* forward(Transformer* transformer, int token, int pos) {
                 vec[i+1] = v0 * fci + v1 * fcr;
             }
         }
+        rope_time += time_in_ms() - start;
 
         // multihead attention. iterate over all heads
         int h;
+        start = time_in_ms();
         for (h = 0; h < p->n_heads; h++) {
             // get the query vector for this head
             float* q = s->q + h * head_size;
@@ -383,6 +391,7 @@ float* forward(Transformer* transformer, int token, int pos) {
                 }
             }
         }
+        attention_time += time_in_ms() - start;
 
         bit_rmsnorm(s->xb, s->xb, dim);
 
@@ -409,6 +418,7 @@ float* forward(Transformer* transformer, int token, int pos) {
         bit_matmul(s->hb, qa, w->w1 + l, dim, hidden_dim, a_s);
         bit_matmul(s->hb2, qa, w->w3 + l, dim, hidden_dim, a_s);
 
+        start = time_in_ms();
         // SwiGLU non-linearity
         for (int i = 0; i < hidden_dim; i++) {
             float val = s->hb[i];
@@ -418,6 +428,7 @@ float* forward(Transformer* transformer, int token, int pos) {
             val *= s->hb2[i];
             s->hb[i] = val;
         }
+        glu_time += time_in_ms() - start;
 
         // final matmul to get the output of the ffn
         bit_rmsnorm(s->hb, s->hb, hidden_dim);
@@ -822,7 +833,9 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     while (pos < steps) {
 
         // forward the transformer to get logits for the next token
+        forward_time = time();
         float* logits = forward(transformer, token, pos);
+        forward_time = time() - forward_time;
 
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
@@ -897,11 +910,14 @@ int main(){
 
     // Print Profiler Information
     printf("Total Time: %d\n", total_time);
+    printf("Forward Time: %d\n", forward_time);
     printf("BitMatmul Time: %d\n", matmul_time);
     printf("RMSNorm Time: %d\n", rmsnorm_time);
     printf("Quant Time: %d\n", quant_time);
+    printf("Attention Time: %d\n", attention_time);
+    printf("GLU Time: %d\n", glu_time);
+    printf("RoPE Time: %d\n", rope_time);
     printf("FMatmul Time: %d\n", fmatmul_time);
-    
     exit(0);
     return 0;
 }

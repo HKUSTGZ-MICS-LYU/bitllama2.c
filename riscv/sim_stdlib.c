@@ -257,6 +257,7 @@ void *_sbrk (incr)
     prev_heap_end = heap_end;
     heap_end += incr;
     printf("sbrk: %d, curr_heap_end: %x, prog_end: %x\n", incr, heap_end, &end);
+    printf("Current Heap Usage: %d KB\n", (heap_end - &end) / 1024);
     return (void *) prev_heap_end;
 }
 

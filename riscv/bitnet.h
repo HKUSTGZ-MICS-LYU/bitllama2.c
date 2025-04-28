@@ -144,4 +144,3 @@ void act_quantize(float *a, int8_t *qa, float s, int n){
     }
     quant_time += time() - start;
 }
-
