@@ -35,11 +35,11 @@ void qmatmul(int8_t *input, int32_t *output, uint8_t *weight, int n, int d){
         for(int j=0; j<n; j++){
             #if BITNET_QUANT == 2 // 1-bit Quantization
             uint8_t w = weight[(i*n + j) >> 3];
-            uint8_t w_shift = (w >> (7-(j&0b111))) & 0b1;
+            uint8_t w_shift = (w >> (j&0b111)) & 0b1;
             output[i] += w_shift == 0 ? input[j] : -input[j];
             #else
             uint8_t w = weight[(i*n + j) >> 2];
-            uint8_t w_shift = (w >> (6-((j&0b11)<<1))) & 0b11;
+            uint8_t w_shift = (w >> ((j&0b11)<<1)) & 0b11;
             #if BITNET_QUANT == 3 // 1.5-bit Quantization
             output[i] += w_shift == 1 ? input[j] : (w_shift == 3 ? -input[j] : 0); 
             #elif BITNET_QUANT == 4 // 2-bit Quantization

@@ -87,25 +87,59 @@ class BitLinear(nn.Linear):
 
     def export(self):
         if self.qtype == "1.5b":
-            u,s = weight_quant(self.weight)
+            u, s = weight_quant(self.weight)
+            bits_per_weight = 2
         elif self.qtype == "2b":
-            u,s = weight_quantnb(self.weight, 2)
+            u, s = weight_quantnb(self.weight, 2)
+            bits_per_weight = 2
         elif self.qtype == "1b":
-            u,s = weight_quant1b(self.weight)
+            u, s = weight_quant1b(self.weight)
+            bits_per_weight = 1
         else:
             raise ValueError("Invalid quantization type")
         
-        buffer = bytearray()
-        qweight = []
-        u = u.cpu().view(-1).to(torch.int8).numpy()
-        for w in u:
-            qweight.append(map_w(w, self.qtype))
-        wb = "".join(qweight)
-        i = 0
-        while i < len(wb):
-            buffer.append( int(wb[i:i+8], 2) )
-            i += 8
-
+        # Convert to numpy for easier bit manipulation
+        weights = u.cpu().view(-1).to(torch.int8).numpy()
+        
+        # Calculate how many weights fit in one byte
+        weights_per_byte = 8 // bits_per_weight
+        
+        # Create buffer with correct size
+        buffer = bytearray((len(weights) + weights_per_byte - 1) // weights_per_byte)
+        
+        # Pack weights directly into bytes
+        for i in range(0, len(weights), weights_per_byte):
+            byte_val = 0
+            
+            # Process each weight that goes into this byte
+            for j in range(weights_per_byte):
+                if i + j >= len(weights):
+                    break
+                    
+                w = weights[i + j]
+                
+                if self.qtype == "1b":
+                    # For 1-bit: -1 -> 1, 1 -> 0
+                    bit_val = 0 if w > 0 else 1
+                    byte_val |= (bit_val << j)  # MSB first for hardware efficiency
+                    
+                else:  # 1.5b or 2b
+                    # For 2-bit: -1 -> 11, 0 -> 00, 1 -> 01, (2 -> 10 for 2b)
+                    if w == -1:
+                        bit_val = 0b11
+                    elif w == 0:
+                        bit_val = 0b00
+                    elif w == 1:
+                        bit_val = 0b01
+                    else:  # Only for 2b
+                        bit_val = 0b10
+                        
+                    # Pack 2-bit value into the byte (MSB first)
+                    shift = (j * 2)  # Start from highest bit position
+                    byte_val |= (bit_val << shift)
+                    
+            buffer[i // weights_per_byte] = byte_val
+        
         return s, buffer
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -335,7 +335,7 @@ void bit_matmul(float* xout, int8_t* qa, BitNetWeight* w, int n, int d, float a_
         qo[i] = 0;
         for(int j=0; j<n; j++){
             uint8_t w = weight[(i*n + j) >> 2];
-            uint8_t w_shift = (w >> (6-((j&0b11)<<1))) & 0b11;
+            uint8_t w_shift = (w >> (2 * ( j & 0x03 ))) & 0x03;
             qo[i] += w_shift == 1 ? qa[j] : (w_shift == 3 ? -qa[j] : 0); 
         }
     }
@@ -349,6 +349,16 @@ void bit_matmul(float* xout, int8_t* qa, BitNetWeight* w, int n, int d, float a_
     quant_time += time_in_ms() - start;
 
     free(qo);
+}
+
+static inline float fast_sigmoid(float x) {
+    // Piecewise approximation, much faster than expf
+    if (x < -5.0f) return 0.0f;
+    if (x > 5.0f) return 1.0f;
+    // Minimax approximation
+    float x2 = x * x;
+    float e = 1.0f + x + x2 * 0.5f + x2 * x * 0.1666667f;
+    return e / (e + 1.0f);
 }
 
 float* forward(Transformer* transformer, int token, int pos) {
@@ -476,6 +486,7 @@ float* forward(Transformer* transformer, int token, int pos) {
             float val = s->hb[i];
             // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
             val *= (1.0f / (1.0f + expf(-val)));
+            // val *= fast_sigmoid(val);
             // elementwise multiply with w3(x)
             val *= s->hb2[i];
             s->hb[i] = val;
